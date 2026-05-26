@@ -2,10 +2,12 @@
 # This file sets up the core infrastructure components
 terraform {
   backend "s3" {
-    bucket  = "dataops-glue-etl-tfstate-dev"
-    key     = "terraform/state"
-    region  = "ap-southeast-1"
-    profile = "cloud-user"
+    bucket         = "nash-dataops-tfstate-630952739663-us-west-1-dev"
+    key            = "aws/dataops/dev/terraform.tfstate"
+    region         = "us-west-1"
+    dynamodb_table = "nash-dataops-tf-locks-dev"
+    encrypt        = true
+    profile        = "cloud-user"
   }
 }
 
@@ -26,17 +28,71 @@ provider "aws" {
 
 #-------------------- VPC Infrastructure --------------------
 
-# Data resource to get the default VPC
-data "aws_vpc" "default" {
-  default = true
+data "aws_availability_zones" "available" {
+  state = "available"
 }
 
-# Get the default subnet for the default VPC
-data "aws_subnets" "default" {
-  filter {
-    name   = "vpc-id"
-    values = [data.aws_vpc.default.id]
+resource "aws_vpc" "dataops_vpc" {
+  cidr_block           = "10.42.0.0/16"
+  enable_dns_hostnames = true
+  enable_dns_support   = true
+
+  tags = {
+    Name = "dataops-demo-vpc-${var.environment}"
   }
+}
+
+resource "aws_internet_gateway" "dataops_igw" {
+  vpc_id = aws_vpc.dataops_vpc.id
+
+  tags = {
+    Name = "dataops-demo-igw-${var.environment}"
+  }
+}
+
+resource "aws_subnet" "public_a" {
+  vpc_id                  = aws_vpc.dataops_vpc.id
+  cidr_block              = "10.42.1.0/24"
+  availability_zone       = data.aws_availability_zones.available.names[0]
+  map_public_ip_on_launch = true
+
+  tags = {
+    Name = "dataops-demo-public-a-${var.environment}"
+  }
+}
+
+resource "aws_subnet" "public_b" {
+  vpc_id                  = aws_vpc.dataops_vpc.id
+  cidr_block              = "10.42.2.0/24"
+  availability_zone       = data.aws_availability_zones.available.names[1]
+  map_public_ip_on_launch = true
+
+  tags = {
+    Name = "dataops-demo-public-b-${var.environment}"
+  }
+}
+
+resource "aws_route_table" "public" {
+  vpc_id = aws_vpc.dataops_vpc.id
+
+  route {
+    cidr_block = "0.0.0.0/0"
+    gateway_id = aws_internet_gateway.dataops_igw.id
+  }
+
+  tags = {
+    Name = "dataops-demo-public-rt-${var.environment}"
+  }
+}
+
+resource "aws_route_table_association" "public_a" {
+  subnet_id      = aws_subnet.public_a.id
+  route_table_id = aws_route_table.public.id
+}
+
+resource "aws_route_table_association" "public_b" {
+  subnet_id      = aws_subnet.public_b.id
+  route_table_id = aws_route_table.public.id
 }
 
 #-------------------- S3 Infrastructure --------------------
@@ -58,43 +114,61 @@ resource "aws_s3_bucket_server_side_encryption_configuration" "data_bucket_encry
   }
 }
 
-# Upload 2024-01 fhvhv_tripdata data to S3
+# Optionally upload bundled sample data. The default is false because demo inputs
+# are expected to be uploaded manually before running the pipeline.
 resource "aws_s3_object" "fhvhv_tripdata_sample_data" {
+  count = var.upload_sample_data ? 1 : 0
+
   bucket = aws_s3_bucket.data_bucket.id
-  key    = "raw/fhvhv_trips/2024/01/fhvhv_tripdata.parquet"
+  key    = "${local.bronze_prefix}/fhvhv_trips/2024/01/fhvhv_tripdata.parquet"
   source = "${path.module}/../data/fhvhv_trips/2024/01/fhvhv_tripdata.parquet"
+  etag   = filemd5("${path.module}/../data/fhvhv_trips/2024/01/fhvhv_tripdata.parquet")
 }
 
-# Upload 2024-02 fhvhv_tripdata data to S3
-# resource "aws_s3_object" "fhvhv_tripdata_sample_data_2" {
-#   bucket = aws_s3_bucket.data_bucket.id
-#   key    = "raw/fhvhv_trips/2024/02/fhvhv_tripdata.parquet"
-#   source = "${path.module}/../data/fhvhv_trips/2024/02/fhvhv_tripdata.parquet"
-# }
+resource "aws_s3_object" "fhvhv_tripdata_sample_data_2" {
+  count = var.upload_sample_data ? 1 : 0
 
-# Upload taxi_zone_lookup data to S3
-resource "aws_s3_object" "taxi_zone_lookup_sample_data" {
   bucket = aws_s3_bucket.data_bucket.id
-  key    = "raw/taxi_zone_lookup.csv"
+  key    = "${local.bronze_prefix}/fhvhv_trips/2024/02/fhvhv_tripdata.parquet"
+  source = "${path.module}/../data/fhvhv_trips/2024/02/fhvhv_tripdata.parquet"
+  etag   = filemd5("${path.module}/../data/fhvhv_trips/2024/02/fhvhv_tripdata.parquet")
+}
+
+resource "aws_s3_object" "taxi_zone_lookup_sample_data" {
+  count = var.upload_sample_data ? 1 : 0
+
+  bucket = aws_s3_bucket.data_bucket.id
+  key    = "${local.bronze_prefix}/reference/taxi_zone_lookup.csv"
   source = "${path.module}/../data/taxi_zone_lookup.csv"
   etag   = filemd5("${path.module}/../data/taxi_zone_lookup.csv")
 }
 
-# Create S3 directories for processed data
-resource "aws_s3_object" "processed_fhvhv_directory" {
+# Create S3 directories for lakehouse layers and operational outputs
+resource "aws_s3_object" "silver_fhvhv_directory" {
   bucket       = aws_s3_bucket.data_bucket.id
-  key          = "processed/fhvhv_trips/"
+  key          = "${local.silver_prefix}/fhvhv_trips/"
   content_type = "application/x-directory"
 }
 
-# Create requirements.txt for Glue Python jobs
-resource "aws_s3_object" "glue_requirements" {
-  bucket  = aws_s3_bucket.data_bucket.id
-  key     = "scripts/requirements.txt"
-  content = <<-EOF
-  psycopg2-binary==2.9.5
-  boto3>=1.24.0
-  EOF
+resource "aws_s3_object" "gold_redshift_directory" {
+  bucket       = aws_s3_bucket.data_bucket.id
+  key          = "${local.gold_prefix}/redshift/"
+  content_type = "application/x-directory"
+}
+
+resource "aws_s3_object" "quarantine_fhvhv_directory" {
+  bucket       = aws_s3_bucket.data_bucket.id
+  key          = "${local.quarantine_prefix}/fhvhv_trips/"
+  content_type = "application/x-directory"
+}
+
+resource "aws_s3_object" "glue_artifacts" {
+  for_each = local.glue_artifact_files
+
+  bucket = aws_s3_bucket.data_bucket.id
+  key    = "scripts/${each.value}"
+  source = "${local.glue_artifact_source_dir}/${each.value}"
+  etag   = filemd5("${local.glue_artifact_source_dir}/${each.value}")
 }
 
 #-------------------- IAM  --------------------
@@ -156,7 +230,10 @@ resource "aws_iam_role" "glue_role" {
         Action = "sts:AssumeRole"
         Effect = "Allow"
         Principal = {
-          Service = "glue.amazonaws.com"
+          Service = [
+            "glue.amazonaws.com",
+            "redshift.amazonaws.com"
+          ]
         }
       }
     ]
@@ -220,7 +297,7 @@ resource "aws_iam_role_policy" "glue_s3_access" {
 resource "aws_security_group" "redshift_security_group" {
   name        = "redshift-sg-${var.environment}"
   description = "Security group for Redshift access"
-  vpc_id      = data.aws_vpc.default.id
+  vpc_id      = aws_vpc.dataops_vpc.id
 
   ingress {
     from_port   = 5439
@@ -237,17 +314,27 @@ resource "aws_security_group" "redshift_security_group" {
   }
 }
 
+resource "aws_redshift_subnet_group" "dataops_redshift_subnet_group" {
+  name       = "dataops-redshift-subnet-group-${var.environment}"
+  subnet_ids = [aws_subnet.public_a.id, aws_subnet.public_b.id]
+
+  tags = {
+    Name = "dataops-redshift-subnet-group-${var.environment}"
+  }
+}
+
 resource "aws_redshift_cluster" "dataops_redshift" {
-  cluster_identifier     = "dataops-demo-cluster-${var.environment}"
-  node_type              = "ra3.large"
-  number_of_nodes        = 1
-  master_username        = var.redshift_username
-  master_password        = var.redshift_password
-  iam_roles              = [aws_iam_role.glue_role.arn]
-  cluster_type           = "single-node"
-  encrypted              = true
-  publicly_accessible    = true
-  vpc_security_group_ids = [aws_security_group.redshift_security_group.id]
+  cluster_identifier        = "dataops-demo-cluster-${var.environment}"
+  node_type                 = var.redshift_node_type
+  number_of_nodes           = 1
+  master_username           = var.redshift_username
+  master_password           = var.redshift_password
+  iam_roles                 = [aws_iam_role.glue_role.arn]
+  cluster_type              = "single-node"
+  encrypted                 = true
+  publicly_accessible       = true
+  cluster_subnet_group_name = aws_redshift_subnet_group.dataops_redshift_subnet_group.name
+  vpc_security_group_ids    = [aws_security_group.redshift_security_group.id]
 
   tags = {
     Name = "dataops-demo-redshift"

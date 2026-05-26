@@ -1,27 +1,18 @@
-# Create Glue Database 
-# Glue Database is used to store metadata tables
+# Glue Data Catalog for the Bronze and Silver lakehouse layers.
 resource "aws_glue_catalog_database" "demo_db" {
   name        = "etl_demo_db_${var.environment}"
-  description = "Database for ETL demo in ${var.environment} environment"
+  description = "Database for the Nash DataOps lakehouse demo in ${var.environment}"
 }
 
-# Create Glue Crawler
-# Glue Crawler is used to scan the raw data and processed data in S3 and create metadata tables in the Glue Data Catalog
-
-# We will use 2 crawlers to scan raw and processed data in which:
-# 1. Raw data: is kind of data that downloaded from https://www.nyc.gov/site/tlc/about/fhv-trip-record-data.page and put to raw folder in s3 (data lake)
-# 2. Processed data: is kind of data that processed from raw data and put to processed folder in s3 (data lake)
-
-# Crawler for raw data sources
-resource "aws_glue_crawler" "raw_data_crawler" {
-  name          = "raw-data-crawler-${var.environment}"
-  role          = aws_iam_role.glue_role.arn
+resource "aws_glue_crawler" "bronze_data_crawler" {
+  name          = "bronze-data-crawler-${var.environment}"
+  role          = aws_iam_role.glue_crawler_role.arn
   database_name = aws_glue_catalog_database.demo_db.name
-  table_prefix  = "raw_"
+  table_prefix  = "bronze_"
 
   s3_target {
-    path       = "s3://${aws_s3_bucket.data_bucket.bucket}/raw/fhvhv_trips/"
-    exclusions = ["*.csv"] # Exclude non-parquet files like taxi_zone_lookup.csv
+    path       = "s3://${aws_s3_bucket.data_bucket.bucket}/${local.bronze_prefix}/fhvhv_trips/"
+    exclusions = ["*.csv"]
   }
 
   schema_change_policy {
@@ -37,19 +28,19 @@ resource "aws_glue_crawler" "raw_data_crawler" {
   })
 
   tags = {
-    Name = "raw-data-crawler-${var.environment}"
+    Name  = "bronze-data-crawler-${var.environment}"
+    Layer = "Bronze"
   }
 }
 
-# Crawler for processed data
-resource "aws_glue_crawler" "processed_data_crawler" {
-  name          = "processed-data-crawler-${var.environment}"
-  role          = aws_iam_role.glue_role.arn
+resource "aws_glue_crawler" "silver_data_crawler" {
+  name          = "silver-data-crawler-${var.environment}"
+  role          = aws_iam_role.glue_crawler_role.arn
   database_name = aws_glue_catalog_database.demo_db.name
-  table_prefix  = "processed_"
+  table_prefix  = "silver_"
 
   s3_target {
-    path = "s3://${aws_s3_bucket.data_bucket.bucket}/processed/fhvhv_trips/"
+    path = "s3://${aws_s3_bucket.data_bucket.bucket}/${local.silver_prefix}/fhvhv_trips/"
   }
 
   schema_change_policy {
@@ -65,6 +56,7 @@ resource "aws_glue_crawler" "processed_data_crawler" {
   })
 
   tags = {
-    Name = "processed-data-crawler-${var.environment}"
+    Name  = "silver-data-crawler-${var.environment}"
+    Layer = "Silver"
   }
 }

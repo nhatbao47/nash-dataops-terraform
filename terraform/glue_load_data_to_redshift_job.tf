@@ -1,9 +1,4 @@
-# # AWS Glue Job configuration for loading processed data from S3 to Redshift ( Data Lake to Data Warehouse)
-
-# Get the subnet's availability zone
-data "aws_subnet" "selected" {
-  id = data.aws_subnets.default.ids[0]
-}
+# AWS Glue and Redshift configuration for loading Gold data into the warehouse.
 
 # Create Glue connection to Redshift
 resource "aws_glue_connection" "redshift_connection" {
@@ -17,9 +12,9 @@ resource "aws_glue_connection" "redshift_connection" {
   }
 
   physical_connection_requirements {
-    availability_zone      = data.aws_subnet.selected.availability_zone
+    availability_zone      = aws_subnet.public_a.availability_zone
     security_group_id_list = [aws_security_group.redshift_security_group.id]
-    subnet_id              = data.aws_subnet.selected.id
+    subnet_id              = aws_subnet.public_a.id
   }
 
   depends_on = [aws_redshift_cluster.dataops_redshift]
@@ -43,9 +38,9 @@ resource "aws_glue_connection" "redshift_connection" {
 
 # Create schema from catalog Glue Job
 resource "aws_glue_job" "glue_manage_redshift_schema_job" {
-  name              = "glue-manage-redshift-schema-job-${var.environment}"
+  name              = "glue-manage-redshift-star-schema-${var.environment}"
   role_arn          = aws_iam_role.glue_role.arn
-  glue_version      = "3.0"
+  glue_version      = "5.0"
   worker_type       = "G.1X"
   number_of_workers = 2
   timeout           = 60
@@ -62,9 +57,6 @@ resource "aws_glue_job" "glue_manage_redshift_schema_job" {
     "--enable-continuous-cloudwatch-log" = "true"
     "--enable-spark-ui"                  = "true"
     "--spark-event-logs-path"            = "s3://${aws_s3_bucket.data_bucket.bucket}/spark-logs/"
-    "--database_name"                    = aws_glue_catalog_database.demo_db.name
-    "--table_name"                       = "processed_fhvhv_trips"
-    "--redshift_connection"              = aws_glue_connection.redshift_connection.name
     "--redshift_database"                = var.redshift_database
     "--redshift_schema"                  = var.redshift_schema
     "--redshift_table"                   = var.redshift_table
@@ -74,8 +66,7 @@ resource "aws_glue_job" "glue_manage_redshift_schema_job" {
     "--enable-job-insights"              = "true"
     "--enable-glue-datacatalog"          = "true"
     "--enable-metrics"                   = "true"
-    "--additional-python-modules"         = "psycopg2-binary==2.9.9"
-    "--conf"                             = "spark.sql.legacy.timeParserPolicy=LEGACY --conf spark.sql.legacy.parquet.int96RebaseModeInRead=LEGACY --conf spark.sql.legacy.parquet.int96RebaseModeInWrite=LEGACY"
+    "--additional-python-modules"        = "psycopg2-binary==2.9.9"
   }
 
   execution_property {
@@ -85,17 +76,18 @@ resource "aws_glue_job" "glue_manage_redshift_schema_job" {
   # connections = [aws_glue_connection.redshift_connection.name]
 
   tags = {
-    Name = "glue-manage-redshift-schema-job-${var.environment}"
+    Name  = "glue-manage-redshift-star-schema-${var.environment}"
+    Layer = "Gold"
   }
 
-  # depends_on = [aws_s3_object.glue_manage_redshift_schema_script]
+  depends_on = [aws_s3_object.glue_artifacts]
 }
 
 # Create Redshift load Glue Job
 resource "aws_glue_job" "glue_load_data_to_redshift_job" {
-  name              = "glue-load-data-to-redshift-job-${var.environment}"
+  name              = "glue-load-gold-to-redshift-${var.environment}"
   role_arn          = aws_iam_role.glue_role.arn
-  glue_version      = "3.0"
+  glue_version      = "5.0"
   worker_type       = "G.1X"
   number_of_workers = 2
   timeout           = 60
@@ -114,17 +106,18 @@ resource "aws_glue_job" "glue_load_data_to_redshift_job" {
     "--enable-spark-ui"                  = "true"
     "--spark-event-logs-path"            = "s3://${aws_s3_bucket.data_bucket.bucket}/spark-logs/"
     "--data_bucket_name"                 = aws_s3_bucket.data_bucket.bucket
-    "--database_name"                    = aws_glue_catalog_database.demo_db.name
     "--redshift_host"                    = aws_redshift_cluster.dataops_redshift.endpoint
     "--redshift_username"                = var.redshift_username
     "--redshift_password"                = var.redshift_password
-    "--redshift_connection"              = aws_glue_connection.redshift_connection.name
     "--redshift_database"                = var.redshift_database
     "--redshift_schema"                  = var.redshift_schema
     "--redshift_table"                   = var.redshift_table
+    "--redshift_iam_role_arn"            = aws_iam_role.glue_role.arn
+    "--run_id"                           = "manual"
     "--enable-job-insights"              = "true"
     "--enable-glue-datacatalog"          = "true"
     "--enable-metrics"                   = "true"
+    "--additional-python-modules"        = "psycopg2-binary==2.9.9"
   }
 
   execution_property {
@@ -134,8 +127,9 @@ resource "aws_glue_job" "glue_load_data_to_redshift_job" {
   # connections = [aws_glue_connection.redshift_connection.name]
 
   tags = {
-    Name = "glue-load-data-to-redshift-job-${var.environment}"
+    Name  = "glue-load-gold-to-redshift-${var.environment}"
+    Layer = "Gold"
   }
 
-  # depends_on = [aws_s3_object.glue_load_data_to_redshift_script]
+  depends_on = [aws_s3_object.glue_artifacts]
 }

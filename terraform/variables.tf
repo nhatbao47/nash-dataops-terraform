@@ -1,12 +1,18 @@
 variable "region" {
   description = "AWS region to deploy resources"
-  default     = "ap-southeast-1"
+  default     = "us-west-1"
   type        = string
 }
 
 variable "data_bucket_name" {
   description = "S3 bucket name for storing data and scripts"
   type        = string
+}
+
+variable "upload_sample_data" {
+  description = "Whether Terraform should upload the bundled sample trip and taxi zone files. Keep false when data is uploaded manually."
+  type        = bool
+  default     = false
 }
 
 variable "environment" {
@@ -49,9 +55,21 @@ variable "redshift_schema" {
 }
 
 variable "redshift_table" {
-  description = "Redshift table name for FHVHV data"
+  description = "Redshift fact table name for FHVHV trip data"
   type        = string
-  default     = "fhvhv_trips"
+  default     = "fact_fhvhv_trips"
+}
+
+variable "redshift_node_type" {
+  description = "Provisioned Redshift node type for the public demo cluster"
+  type        = string
+  default     = "ra3.large"
+}
+
+variable "pipeline_schedule_expression" {
+  description = "EventBridge schedule expression for running the Step Functions data pipeline"
+  type        = string
+  default     = "cron(0 0 3 * ? *)"
 }
 
 # Adding common tags variable for consistent resource tagging
