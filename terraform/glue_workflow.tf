@@ -152,7 +152,7 @@ resource "aws_sfn_state_machine" "data_pipeline_state_machine" {
           {
             Variable     = "$.BronzeCrawler.Crawler.State"
             StringEquals = "READY"
-            Next         = "Process Bronze To Silver"
+            Next         = "Start Bronze Data Quality"
           },
           {
             Variable     = "$.BronzeCrawler.Crawler.State"
@@ -167,6 +167,111 @@ resource "aws_sfn_state_machine" "data_pipeline_state_machine" {
         Type  = "Fail"
         Error = "BronzeCrawlerFailed"
         Cause = "The Bronze Glue crawler failed."
+      }
+
+      "Start Bronze Data Quality" = {
+        Type     = "Task"
+        Resource = "arn:aws:states:::aws-sdk:glue:startDataQualityRulesetEvaluationRun"
+        Parameters = {
+          DataSource = {
+            GlueTable = {
+              DatabaseName = aws_glue_catalog_database.demo_db.name
+              TableName    = local.bronze_fhvhv_table_name
+            }
+          }
+          Role            = aws_iam_role.glue_role.arn
+          NumberOfWorkers = 2
+          Timeout         = 60
+          RulesetNames    = [aws_glue_data_quality_ruleset.bronze_fhvhv_quality.name]
+          AdditionalRunOptions = {
+            CloudWatchMetricsEnabled = true
+            ResultsS3Prefix          = "s3://${aws_s3_bucket.data_bucket.bucket}/${local.gold_prefix}/data-quality-results/bronze/"
+          }
+        }
+        ResultPath = "$.BronzeDataQualityStart"
+        Next       = "Wait For Bronze Data Quality"
+      }
+
+      "Wait For Bronze Data Quality" = {
+        Type    = "Wait"
+        Seconds = 30
+        Next    = "Get Bronze Data Quality Evaluation"
+      }
+
+      "Get Bronze Data Quality Evaluation" = {
+        Type     = "Task"
+        Resource = "arn:aws:states:::aws-sdk:glue:getDataQualityRulesetEvaluationRun"
+        Parameters = {
+          "RunId.$" = "$.BronzeDataQualityStart.RunId"
+        }
+        ResultPath = "$.BronzeDataQualityRun"
+        Next       = "Bronze Data Quality Evaluation Complete?"
+      }
+
+      "Bronze Data Quality Evaluation Complete?" = {
+        Type = "Choice"
+        Choices = [
+          {
+            Variable     = "$.BronzeDataQualityRun.Status"
+            StringEquals = "SUCCEEDED"
+            Next         = "Get Bronze Data Quality Result"
+          },
+          {
+            Variable     = "$.BronzeDataQualityRun.Status"
+            StringEquals = "RUNNING"
+            Next         = "Wait For Bronze Data Quality"
+          },
+          {
+            Variable     = "$.BronzeDataQualityRun.Status"
+            StringEquals = "STARTING"
+            Next         = "Wait For Bronze Data Quality"
+          },
+          {
+            Variable     = "$.BronzeDataQualityRun.Status"
+            StringEquals = "FAILED"
+            Next         = "Bronze Data Quality Evaluation Failed"
+          },
+          {
+            Variable     = "$.BronzeDataQualityRun.Status"
+            StringEquals = "TIMEOUT"
+            Next         = "Bronze Data Quality Evaluation Failed"
+          }
+        ]
+        Default = "Wait For Bronze Data Quality"
+      }
+
+      "Bronze Data Quality Evaluation Failed" = {
+        Type  = "Fail"
+        Error = "BronzeDataQualityEvaluationFailed"
+        Cause = "The Bronze Glue Data Quality evaluation run did not complete successfully."
+      }
+
+      "Get Bronze Data Quality Result" = {
+        Type     = "Task"
+        Resource = "arn:aws:states:::aws-sdk:glue:getDataQualityResult"
+        Parameters = {
+          "ResultId.$" = "$.BronzeDataQualityRun.ResultIds[0]"
+        }
+        ResultPath = "$.BronzeDataQualityResult"
+        Next       = "Bronze Quality Score Passed?"
+      }
+
+      "Bronze Quality Score Passed?" = {
+        Type = "Choice"
+        Choices = [
+          {
+            Variable                 = "$.BronzeDataQualityResult.Score"
+            NumericGreaterThanEquals = 1
+            Next                     = "Process Bronze To Silver"
+          }
+        ]
+        Default = "Bronze Data Quality Gate Failed"
+      }
+
+      "Bronze Data Quality Gate Failed" = {
+        Type  = "Fail"
+        Error = "BronzeDataQualityScoreBelowThreshold"
+        Cause = "Bronze data failed the quality score threshold before Silver transformation."
       }
 
       "Process Bronze To Silver" = {

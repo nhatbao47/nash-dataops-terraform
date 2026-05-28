@@ -8,6 +8,11 @@ output "step_functions_state_machine_arn" {
   value       = aws_sfn_state_machine.data_pipeline_state_machine.arn
 }
 
+output "bronze_data_quality_ruleset_name" {
+  description = "Glue Data Quality ruleset used as the Bronze-to-Silver input gate"
+  value       = aws_glue_data_quality_ruleset.bronze_fhvhv_quality.name
+}
+
 output "silver_data_quality_ruleset_name" {
   description = "Glue Data Quality ruleset used as the Silver-to-Gold gate"
   value       = aws_glue_data_quality_ruleset.silver_fhvhv_quality.name
@@ -41,4 +46,9 @@ output "redshift_database" {
 output "redshift_schema" {
   description = "Redshift schema containing the presentation model"
   value       = var.redshift_schema
+}
+
+output "cloudwatch_observability_dashboard_url" {
+  description = "AWS Console URL for the metric-only CloudWatch observability dashboard"
+  value       = local.cloudwatch_observability_dashboard_url
 }
